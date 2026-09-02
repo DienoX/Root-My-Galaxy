@@ -357,10 +357,10 @@ class PayloadRepository(private val context: Context) {
     companion object {
 
         private const val COMMIT_API_URL =
-            "https://api.github.com/repos/UsrBinLuna/Root-My-Galaxy-Payloads/git/ref/heads/main"
+            "https://api.github.com/repos/Jonast41/Root-My-Galaxy-Payloads/git/ref/heads/main"
 
         private const val RAW_REPOSITORY =
-            "https://raw.githubusercontent.com/UsrBinLuna/Root-My-Galaxy-Payloads"
+            "https://raw.githubusercontent.com/Jonast41/Root-My-Galaxy-Payloads"
 
         private const val MUTABLE_RAW_PREFIX =
             "$RAW_REPOSITORY/main/"
