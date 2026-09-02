@@ -7,7 +7,6 @@ import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
-import org.json.JSONObject
 
 data class VerifiedPayloads(
     val profile: TargetProfile,
@@ -18,29 +17,12 @@ data class VerifiedPayloads(
 class PayloadRepository(private val context: Context) {
 
     fun loadTargets(): List<TargetProfile> {
-        val commit = resolveMainCommit()
-
         val manifestBytes = downloadBytes(
-            rawUrl(commit, "support/targets-v3.json"),
+            "$RAW_REPOSITORY/main/support/targets-v3.json",
             MAX_MANIFEST_BYTES,
         )
 
-        return SupportManifest.parse(manifestBytes).targets.map { profile ->
-            profile.copy(
-                exploit = profile.exploit.copy(
-                    url = pinArtifactUrl(
-                        profile.exploit.url,
-                        commit,
-                    ),
-                ),
-                kernelSu = profile.kernelSu.copy(
-                    url = pinArtifactUrl(
-                        profile.kernelSu.url,
-                        commit,
-                    ),
-                ),
-            )
-        }
+        return SupportManifest.parse(manifestBytes).targets
     }
 
     fun resolveTarget(snapshot: DeviceSnapshot): TargetProfile =
@@ -134,81 +116,77 @@ class PayloadRepository(private val context: Context) {
             "${destination.name}.part",
         )
 
-        val connection = open(
-            artifact.url,
-        )
-
-        require(
-            connection.contentLengthLong == -1L ||
-                connection.contentLengthLong == artifact.size,
-        ) {
-            context.getString(
-                R.string.repo_size_mismatch,
-                label,
-            )
+        if (temporary.exists()) {
+            temporary.delete()
         }
 
-        var total = 0L
+        val connection = open(artifact.url)
 
-        connection.inputStream.use { input ->
-            FileOutputStream(temporary).use { output ->
-
-                val buffer = ByteArray(
-                    DEFAULT_BUFFER_SIZE,
+        try {
+            require(
+                connection.contentLengthLong == -1L ||
+                    connection.contentLengthLong == artifact.size,
+            ) {
+                context.getString(
+                    R.string.repo_size_mismatch,
+                    label,
                 )
+            }
 
-                while (true) {
+            var total = 0L
 
-                    val count = input.read(
-                        buffer,
-                    )
+            connection.inputStream.use { input ->
+                FileOutputStream(temporary).use { output ->
 
-                    if (count < 0) {
-                        break
-                    }
+                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
 
-                    total += count
+                    while (true) {
+                        val count = input.read(buffer)
 
-                    require(
-                        total <= artifact.size,
-                    ) {
-                        context.getString(
-                            R.string.repo_size_exceeded,
-                            label,
+                        if (count < 0) {
+                            break
+                        }
+
+                        total += count
+
+                        require(total <= artifact.size) {
+                            context.getString(
+                                R.string.repo_size_exceeded,
+                                label,
+                            )
+                        }
+
+                        output.write(
+                            buffer,
+                            0,
+                            count,
                         )
                     }
 
-                    output.write(
-                        buffer,
-                        0,
-                        count,
-                    )
+                    output.fd.sync()
                 }
-
-                output.fd.sync()
             }
-        }
 
-        connection.disconnect()
-
-        require(
-            total == artifact.size,
-        ) {
-            context.getString(
-                R.string.repo_incomplete,
-                label,
-            )
+            require(total == artifact.size) {
+                context.getString(
+                    R.string.repo_incomplete,
+                    label,
+                )
+            }
+        } finally {
+            connection.disconnect()
         }
 
         if (destination.exists()) {
-            destination.delete()
+            require(destination.delete()) {
+                context.getString(
+                    R.string.repo_finalize_failed,
+                    label,
+                )
+            }
         }
 
-        require(
-            temporary.renameTo(
-                destination,
-            ),
-        ) {
+        require(temporary.renameTo(destination)) {
             context.getString(
                 R.string.repo_finalize_failed,
                 label,
@@ -225,110 +203,46 @@ class PayloadRepository(private val context: Context) {
         return destination
     }
 
-    private fun resolveMainCommit(): String {
-
-        val response = downloadBytes(
-            COMMIT_API_URL,
-            MAX_COMMIT_RESPONSE_BYTES,
-        )
-
-        val commit = JSONObject(
-            response.toString(
-                Charsets.UTF_8,
-            ),
-        )
-            .getJSONObject("object")
-            .getString("sha")
-
-        require(
-            commit.matches(
-                Regex("[0-9a-f]{40}"),
-            ),
-        ) {
-            context.getString(
-                R.string.repo_commit_invalid,
-            )
-        }
-
-        return commit
-    }
-
-    private fun rawUrl(
-        commit: String,
-        path: String,
-    ): String =
-        "$RAW_REPOSITORY/$commit/$path"
-
-    private fun pinArtifactUrl(
-        url: String,
-        commit: String,
-    ): String {
-
-        require(
-            url.startsWith(
-                MUTABLE_RAW_PREFIX,
-            ),
-        ) {
-            context.getString(
-                R.string.repo_url_invalid,
-            )
-        }
-
-        return "$RAW_REPOSITORY/$commit/${
-            url.removePrefix(
-                MUTABLE_RAW_PREFIX,
-            )
-        }"
-    }
-
     private fun downloadBytes(
         url: String,
         maximum: Int,
     ): ByteArray {
 
-        val connection = open(
-            url,
-        )
+        val connection = open(url)
 
-        val bytes = connection.inputStream.use { input ->
+        return try {
+            connection.inputStream.use { input ->
 
-            val output = ByteArrayOutputStream()
+                val output = ByteArrayOutputStream()
+                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
 
-            val buffer = ByteArray(
-                DEFAULT_BUFFER_SIZE,
-            )
+                while (true) {
+                    val count = input.read(buffer)
 
-            while (true) {
+                    if (count < 0) {
+                        break
+                    }
 
-                val count = input.read(
-                    buffer,
-                )
+                    require(
+                        output.size() + count <= maximum,
+                    ) {
+                        context.getString(
+                            R.string.repo_response_too_large,
+                        )
+                    }
 
-                if (count < 0) {
-                    break
-                }
-
-                require(
-                    output.size() + count <= maximum,
-                ) {
-                    context.getString(
-                        R.string.repo_response_too_large,
+                    output.write(
+                        buffer,
+                        0,
+                        count,
                     )
                 }
 
-                output.write(
-                    buffer,
-                    0,
-                    count,
-                )
+                output.toByteArray()
             }
-
-            output.toByteArray()
+        } finally {
+            connection.disconnect()
         }
-
-        connection.disconnect()
-
-        return bytes
     }
 
     private fun open(
@@ -356,17 +270,8 @@ class PayloadRepository(private val context: Context) {
 
     companion object {
 
-        private const val COMMIT_API_URL =
-            "https://api.github.com/repos/Jonast41/Root-My-Galaxy-Payloads/git/ref/heads/main"
-
         private const val RAW_REPOSITORY =
-            "https://raw.githubusercontent.com/Jonast41/Root-My-Galaxy-Payloads"
-
-        private const val MUTABLE_RAW_PREFIX =
-            "$RAW_REPOSITORY/main/"
-
-        private const val MAX_COMMIT_RESPONSE_BYTES =
-            16 * 1024
+            "https://raw.githubusercontent.com/DienoX/Root-My-Galaxy-Payloads"
 
         private const val MAX_MANIFEST_BYTES =
             256 * 1024
