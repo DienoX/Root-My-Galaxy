@@ -29,10 +29,16 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
         with:
-          packages: "platform-tools platforms;android-37 build-tools;37.0.0 cmake;3.22.1 ndk;28.2.13676358"
+          packages: "platform-tools"
 
-      # Używamy polecenia `gradle`, ponieważ w przesłanej
-      # strukturze brakuje gradle/wrapper/gradle-wrapper.jar.
+      - name: Install Android 17 SDK, NDK and CMake
+        run: |
+          sdkmanager --channel=3 \
+            "platforms;android-37.0" \
+            "build-tools;37.0.0" \
+            "cmake;3.22.1" \
+            "ndk;28.2.13676358"
+
       - name: Set up Gradle 9.5.1
         uses: gradle/actions/setup-gradle@v6
         with:
@@ -40,7 +46,10 @@ jobs:
           cache-provider: basic
 
       - name: Run unit tests and build APK
-        run: gradle --no-daemon :app:testDebugUnitTest :app:assembleDebug
+        run: |
+          gradle --no-daemon \
+            :app:testDebugUnitTest \
+            :app:assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v7
